@@ -9,6 +9,7 @@ import sqlite3
 
 import pandas as pd
 import streamlit as st
+from rapidfuzz import fuzz, process
 
 
 st.set_page_config(
@@ -255,6 +256,8 @@ def process_leads(
     record_type,
     remove_blank_rows,
     validation_options=None,
+    fuzzy_duplicates=False,
+    fuzzy_threshold=90,
 ):
     # All checks remain enabled by default for backwards compatibility.
     validation_options = validation_options or {
@@ -366,6 +369,55 @@ def process_leads(
             keep=False,
         )
         add_flag(exact_duplicates, "Exact duplicate record")
+
+    # Fuzzy matching is opt-in and bounded to avoid unexpectedly expensive runs.
+    # It flags likely matches only; it never merges or deletes records.
+    if fuzzy_duplicates:
+        if len(df) > 3000:
+            raise ValueError(
+                "Likely-duplicate name checking is limited to 3,000 rows per run. "
+                "Turn it off or upload a smaller batch."
+            )
+
+        if record_type == "Business leads" and company_col and company_col in df.columns:
+            name_values = df[company_col].astype(str).str.strip()
+        elif record_type == "Contact lists" and first_name_col and last_name_col:
+            if first_name_col in df.columns and last_name_col in df.columns:
+                name_values = (
+                    df[first_name_col].astype(str).str.strip()
+                    + " "
+                    + df[last_name_col].astype(str).str.strip()
+                ).str.strip()
+            else:
+                name_values = pd.Series([""] * len(df), index=df.index)
+        else:
+            name_values = pd.Series([""] * len(df), index=df.index)
+
+        def normalize_match(value):
+            return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+        normalized_names = name_values.map(normalize_match).tolist()
+        candidates = sorted({value for value in normalized_names if value})
+        likely_duplicate_positions = set()
+
+        for position, value in enumerate(normalized_names):
+            if not value:
+                continue
+            matches = process.extract(
+                value,
+                candidates,
+                scorer=fuzz.ratio,
+                score_cutoff=fuzzy_threshold,
+                limit=10,
+            )
+            if any(
+                candidate != value and score >= fuzzy_threshold
+                for candidate, score, _ in matches
+            ):
+                likely_duplicate_positions.add(position)
+
+        for position in sorted(likely_duplicate_positions):
+            flags_by_row[position].append("Possible name duplicate")
 
     # Add review results without removing or replacing original fields.
     df["LeadProof Status"] = [
@@ -673,6 +725,21 @@ with st.form("mapping_form"):
     with check_col3:
         check_website_format = st.checkbox("Website format", value=True)
         check_exact_duplicates = st.checkbox("Exact duplicate records", value=True)
+        check_fuzzy_duplicates = st.checkbox(
+            "Likely duplicate names (slower)",
+            value=False,
+            help="Opt-in similarity check for company names or contact full names. Limited to 3,000 rows per run.",
+        )
+
+    fuzzy_threshold = st.slider(
+        "Name similarity threshold",
+        min_value=75,
+        max_value=100,
+        value=90,
+        step=1,
+        help="Higher values flag fewer, closer matches. This is a review hint, not proof of duplication.",
+        disabled=not check_fuzzy_duplicates,
+    )
 
     validation_options = {
         "required_fields": check_required_fields,
@@ -723,6 +790,8 @@ if run_processing:
             record_type=record_type,
             remove_blank_rows=remove_blanks,
             validation_options=validation_options,
+            fuzzy_duplicates=check_fuzzy_duplicates,
+            fuzzy_threshold=fuzzy_threshold,
         )
 
         mapping_saved = save_mapping_preferences(
