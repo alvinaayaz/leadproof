@@ -207,7 +207,8 @@ class LeadProofLogicTests(unittest.TestCase):
             validation_options=ALL_CHECKS_OFF,
             custom_regex_enabled=True,
             custom_regex_col="Account ID",
-            custom_regex_pattern=r"^[A-Z]{2}-\\d{4}$",
+            custom_regex_pattern=r"^[A-Z]{2}-\d{4}$",
+            remove_blank_rows=False,
         )
         self.assertEqual(len(cleaned), 3)
         self.assertEqual(len(flagged), 1)
