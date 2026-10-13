@@ -254,7 +254,20 @@ def process_leads(
     last_name_col,
     record_type,
     remove_blank_rows,
+    validation_options=None,
 ):
+    # All checks remain enabled by default for backwards compatibility.
+    validation_options = validation_options or {
+        "required_fields": True,
+        "missing_email": True,
+        "email_format": True,
+        "duplicate_emails": True,
+        "phone_format": True,
+        "missing_website": True,
+        "website_format": True,
+        "exact_duplicates": True,
+    }
+
     # Work on a copy. The uploaded data is never overwritten.
     df = source_df.copy()
     df.columns = [str(col).strip() for col in df.columns]
@@ -298,35 +311,38 @@ def process_leads(
                 flags_by_row[position].append(message)
 
     # Required information checks depend on the selected record type.
-    if record_type == "Business leads" and company_col and company_col in df.columns:
-        missing = df[company_col].astype(str).str.strip().eq("")
-        add_flag(missing, "Company name missing")
+    if validation_options["required_fields"]:
+        if record_type == "Business leads" and company_col and company_col in df.columns:
+            missing = df[company_col].astype(str).str.strip().eq("")
+            add_flag(missing, "Company name missing")
 
-    if record_type == "Contact lists":
-        if first_name_col and first_name_col in df.columns:
-            missing = df[first_name_col].astype(str).str.strip().eq("")
-            add_flag(missing, "First name missing")
-        if last_name_col and last_name_col in df.columns:
-            missing = df[last_name_col].astype(str).str.strip().eq("")
-            add_flag(missing, "Last name missing")
+        if record_type == "Contact lists":
+            if first_name_col and first_name_col in df.columns:
+                missing = df[first_name_col].astype(str).str.strip().eq("")
+                add_flag(missing, "First name missing")
+            if last_name_col and last_name_col in df.columns:
+                missing = df[last_name_col].astype(str).str.strip().eq("")
+                add_flag(missing, "Last name missing")
 
     if email_col and email_col in df.columns:
         email_values = df[email_col].astype(str).str.strip()
         missing = email_values.eq("")
         invalid = (~missing) & (~email_values.map(email_format_valid))
 
-        add_flag(missing, "Email missing")
-        add_flag(invalid, "Email format needs review")
+        if validation_options["missing_email"]:
+            add_flag(missing, "Email missing")
+        if validation_options["email_format"]:
+            add_flag(invalid, "Email format needs review")
 
-        present = email_values.ne("")
-        duplicates = present & email_values.duplicated(keep=False)
-        add_flag(duplicates, "Email appears more than once")
+        if validation_options["duplicate_emails"]:
+            present = email_values.ne("")
+            duplicates = present & email_values.duplicated(keep=False)
+            add_flag(duplicates, "Email appears more than once")
 
-    if phone_col and phone_col in df.columns:
+    if phone_col and phone_col in df.columns and validation_options["phone_format"]:
         phone_values = df[phone_col].astype(str).str.strip()
         present = phone_values.ne("")
         valid = phone_values.map(phone_format_valid)
-
         add_flag(present & (~valid), "Phone format needs review")
 
     if website_col and website_col in df.columns:
@@ -337,20 +353,19 @@ def process_leads(
             & (~website_values.map(website_format_valid))
         )
 
-        add_flag(missing, "Website missing")
-        add_flag(invalid, "Website format needs review")
+        if validation_options["missing_website"]:
+            add_flag(missing, "Website missing")
+        if validation_options["website_format"]:
+            add_flag(invalid, "Website format needs review")
 
     # Flag exact duplicates across all cleaned source columns.
     # Keep every record; do not automatically discard duplicates.
-    if len(df.columns):
+    if validation_options["exact_duplicates"] and len(df.columns):
         exact_duplicates = df.duplicated(
             subset=list(df.columns),
             keep=False,
         )
-        add_flag(
-            exact_duplicates,
-            "Exact duplicate record",
-        )
+        add_flag(exact_duplicates, "Exact duplicate record")
 
     # Add review results without removing or replacing original fields.
     df["LeadProof Status"] = [
@@ -638,6 +653,38 @@ with st.form("mapping_form"):
             key=f"mapping_last_name_{header_signature[:12]}",
         )
 
+    st.markdown("**Choose which checks to run**")
+    check_col1, check_col2, check_col3 = st.columns(3)
+
+    with check_col1:
+        check_required_fields = st.checkbox(
+            "Required names/company",
+            value=True,
+            help="Flags missing company names for business leads, or missing first/last names for contact lists.",
+        )
+        check_missing_email = st.checkbox("Missing email", value=True)
+        check_email_format = st.checkbox("Email format", value=True)
+
+    with check_col2:
+        check_duplicate_emails = st.checkbox("Duplicate emails", value=True)
+        check_phone_format = st.checkbox("Phone format", value=True)
+        check_missing_website = st.checkbox("Missing website", value=True)
+
+    with check_col3:
+        check_website_format = st.checkbox("Website format", value=True)
+        check_exact_duplicates = st.checkbox("Exact duplicate records", value=True)
+
+    validation_options = {
+        "required_fields": check_required_fields,
+        "missing_email": check_missing_email,
+        "email_format": check_email_format,
+        "duplicate_emails": check_duplicate_emails,
+        "phone_format": check_phone_format,
+        "missing_website": check_missing_website,
+        "website_format": check_website_format,
+        "exact_duplicates": check_exact_duplicates,
+    }
+
     remove_blanks = st.checkbox(
         "Remove completely blank rows",
         value=True,
@@ -675,6 +722,7 @@ if run_processing:
             last_name_col=last_name_col,
             record_type=record_type,
             remove_blank_rows=remove_blanks,
+            validation_options=validation_options,
         )
 
         mapping_saved = save_mapping_preferences(
