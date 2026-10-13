@@ -182,12 +182,10 @@ def process_leads(
     original_row_count = len(df)
 
     # Blank means every cell is empty after trimming.
-    blank_mask = df.apply(
-        lambda row: all(
-            not str(value).strip()
-            for value in row
-        ),
-        axis=1,
+    blank_mask = (
+        df.astype(str)
+        .apply(lambda column: column.str.strip().eq(""))
+        .all(axis=1)
     )
 
     blank_count = int(blank_mask.sum())
