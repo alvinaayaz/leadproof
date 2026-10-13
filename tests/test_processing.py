@@ -27,6 +27,7 @@ FUNCTION_NAMES = {
     "email_format_valid",
     "phone_format_valid",
     "process_leads",
+    "upload_content_signature",
 }
 FUNCTION_NODES = [
     node for node in TREE.body
@@ -55,6 +56,7 @@ exec(
 )
 process_leads = NAMESPACE["process_leads"]
 make_header_signature = NAMESPACE["make_header_signature"]
+upload_content_signature = NAMESPACE["upload_content_signature"]
 
 
 ALL_CHECKS_OFF = {
@@ -89,6 +91,16 @@ def run_processing(frame, **overrides):
 
 
 class LeadProofLogicTests(unittest.TestCase):
+    def test_upload_content_signature_changes_when_contents_change(self):
+        self.assertNotEqual(
+            upload_content_signature(b"first file"),
+            upload_content_signature(b"second file"),
+        )
+        self.assertEqual(
+            upload_content_signature(b"same file"),
+            upload_content_signature(b"same file"),
+        )
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
