@@ -623,6 +623,8 @@ if len(set(source_df.columns)) != len(source_df.columns):
     )
     st.stop()
 
+upload_signature = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+
 st.success(
     f"Loaded **{len(source_df):,} rows** and "
     f"**{len(source_df.columns):,} columns**."
@@ -832,6 +834,9 @@ with st.form("mapping_form"):
     )
 
 if run_processing:
+    # Clear previous output before attempting to process this upload again.
+    st.session_state.pop("leadproof_result", None)
+
     email_col = None if email_choice == "None" else email_choice
     phone_col = None if phone_choice == "None" else phone_choice
     website_col = None if website_choice == "None" else website_choice
@@ -881,6 +886,7 @@ if run_processing:
             "flagged": flagged_df,
             "summary": summary,
             "filename": uploaded_file.name,
+            "file_signature": upload_signature,
             "record_type": record_type,
         }
         if mapping_saved:
@@ -897,7 +903,7 @@ result = st.session_state.get("leadproof_result")
 
 if (
     result
-    and result["filename"] == uploaded_file.name
+    and result.get("file_signature") == upload_signature
     and result.get("record_type") == record_type
 ):
     cleaned_df = result["cleaned"]
