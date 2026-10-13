@@ -258,6 +258,9 @@ def process_leads(
     validation_options=None,
     fuzzy_duplicates=False,
     fuzzy_threshold=90,
+    custom_regex_enabled=False,
+    custom_regex_col=None,
+    custom_regex_pattern="",
 ):
     # All checks remain enabled by default; callers may override only selected checks.
     default_validation_options = {
@@ -420,6 +423,26 @@ def process_leads(
 
         for position in sorted(likely_duplicate_positions):
             flags_by_row[position].append("Possible name duplicate")
+
+    if custom_regex_enabled:
+        if not custom_regex_col or custom_regex_col not in df.columns:
+            raise ValueError("Choose a column for the custom regex check.")
+        if not custom_regex_pattern or not custom_regex_pattern.strip():
+            raise ValueError("Enter a regex pattern for the custom check.")
+        try:
+            compiled_pattern = re.compile(custom_regex_pattern)
+        except re.error as exc:
+            raise ValueError(f"Custom regex pattern is invalid: {exc}") from exc
+
+        custom_values = df[custom_regex_col].astype(str).str.strip()
+        present = custom_values.ne("")
+        matches_pattern = custom_values.map(
+            lambda value: bool(compiled_pattern.fullmatch(value))
+        )
+        add_flag(
+            present & (~matches_pattern),
+            f"Custom format needs review ({custom_regex_col})",
+        )
 
     # Add review results without removing or replacing original fields.
     df["LeadProof Status"] = [
@@ -743,6 +766,27 @@ with st.form("mapping_form"):
         disabled=not check_fuzzy_duplicates,
     )
 
+    st.markdown("**Optional custom format rule**")
+    check_custom_regex = st.checkbox(
+        "Validate a column against my regex pattern",
+        value=False,
+        help="Useful for IDs, postal codes, account codes, or other formats. Non-empty values that do not fully match will be flagged.",
+    )
+    custom_regex_col = st.selectbox(
+        "Column to validate",
+        options,
+        index=0,
+        key=f"mapping_custom_regex_{header_signature[:12]}",
+        disabled=not check_custom_regex,
+    )
+    custom_regex_pattern = st.text_input(
+        "Regex pattern",
+        value="",
+        placeholder=r"Example: ^[A-Z]{2}-\d{4}$",
+        help="Uses Python regular expressions and full-string matching.",
+        disabled=not check_custom_regex,
+    )
+
     validation_options = {
         "required_fields": check_required_fields,
         "missing_email": check_missing_email,
@@ -794,6 +838,11 @@ if run_processing:
             validation_options=validation_options,
             fuzzy_duplicates=check_fuzzy_duplicates,
             fuzzy_threshold=fuzzy_threshold,
+            custom_regex_enabled=check_custom_regex,
+            custom_regex_col=(
+                None if custom_regex_col == "None" else custom_regex_col
+            ),
+            custom_regex_pattern=custom_regex_pattern,
         )
 
         mapping_saved = save_mapping_preferences(
