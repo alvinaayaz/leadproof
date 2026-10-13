@@ -517,11 +517,10 @@ with st.sidebar:
     st.caption("Lead and contact data quality")
     st.divider()
     st.markdown("**Current version**")
-    st.caption("V1 · File processing and data quality")
+    st.caption("V2 · Configurable data quality checks")
     st.info(
-        "Website checks in this version validate URL format only. "
-        "Live website research will be added after the core workflow "
-        "is tested."
+        "Website checks validate URL format only; they do not visit "
+        "websites or confirm that a site is live."
     )
 
 st.markdown(
@@ -968,6 +967,6 @@ if (
 
 st.divider()
 st.caption(
-    "LeadProof V1 · Format checks are not proof of deliverability, "
+    "LeadProof V2 · Format checks are not proof of deliverability, 
     "phone ownership, website availability, or business legitimacy."
 )
