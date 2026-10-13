@@ -754,7 +754,16 @@ with st.form("mapping_form"):
     with check_col2:
         check_duplicate_emails = st.checkbox("Duplicate emails", value=True)
         check_phone_format = st.checkbox("Phone format", value=True)
-        check_missing_website = st.checkbox("Missing website", value=True)
+        check_missing_website = st.checkbox(
+            "Missing website",
+            value=(record_type == "Business leads"),
+            key=(
+                "check_missing_website_business"
+                if record_type == "Business leads"
+                else "check_missing_website_contacts"
+            ),
+            help="Off by default for contact lists because a website is optional.",
+        )
 
     with check_col3:
         check_website_format = st.checkbox("Website format", value=True)
