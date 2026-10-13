@@ -74,6 +74,11 @@ def make_header_signature(columns):
     return hashlib.sha256(payload).hexdigest()
 
 
+def upload_content_signature(content):
+    """Fingerprint file bytes so cached results match the exact uploaded file."""
+    return hashlib.sha256(content).hexdigest()
+
+
 MAPPING_DB_PATH = (
     Path(__file__).resolve().parent / ".leadproof_mappings.sqlite3"
 )
@@ -623,7 +628,7 @@ if len(set(source_df.columns)) != len(source_df.columns):
     )
     st.stop()
 
-upload_signature = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+upload_signature = upload_content_signature(uploaded_file.getvalue())
 
 st.success(
     f"Loaded **{len(source_df):,} rows** and "
