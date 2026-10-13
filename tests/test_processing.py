@@ -1,0 +1,175 @@
+import ast
+import hashlib
+import json
+import re
+import unittest
+from pathlib import Path
+from urllib.parse import urlparse
+
+import pandas as pd
+from rapidfuzz import fuzz, process as rapid_process
+
+
+APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
+TREE = ast.parse(APP_PATH.read_text(encoding="utf-8-sig"))
+FUNCTION_NAMES = {
+    "clean_text",
+    "normalize_header",
+    "make_header_signature",
+    "normalize_email",
+    "normalize_website",
+    "website_format_valid",
+    "email_format_valid",
+    "phone_format_valid",
+    "process_leads",
+}
+FUNCTION_NODES = [
+    node for node in TREE.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    and node.name in FUNCTION_NAMES
+]
+FOUND_NAMES = {node.name for node in FUNCTION_NODES}
+if FOUND_NAMES != FUNCTION_NAMES:
+    raise RuntimeError(
+        f"Could not locate app logic functions: {sorted(FUNCTION_NAMES - FOUND_NAMES)}"
+    )
+
+NAMESPACE = {
+    "pd": pd,
+    "re": re,
+    "urlparse": urlparse,
+    "hashlib": hashlib,
+    "json": json,
+    "fuzz": fuzz,
+    "process": rapid_process,
+}
+exec(
+    compile(ast.Module(body=FUNCTION_NODES, type_ignores=[]), str(APP_PATH), "exec"),
+    NAMESPACE,
+)
+process_leads = NAMESPACE["process_leads"]
+make_header_signature = NAMESPACE["make_header_signature"]
+
+
+ALL_CHECKS_OFF = {
+    "required_fields": False,
+    "missing_email": False,
+    "email_format": False,
+    "duplicate_emails": False,
+    "phone_format": False,
+    "missing_website": False,
+    "website_format": False,
+    "exact_duplicates": False,
+}
+
+
+def run_processing(frame, **overrides):
+    arguments = {
+        "source_df": frame,
+        "email_col": None,
+        "phone_col": None,
+        "website_col": None,
+        "company_col": None,
+        "first_name_col": None,
+        "last_name_col": None,
+        "record_type": "Business leads",
+        "remove_blank_rows": True,
+        "validation_options": ALL_CHECKS_OFF.copy(),
+        "fuzzy_duplicates": False,
+        "fuzzy_threshold": 90,
+    }
+    arguments.update(overrides)
+    return process_leads(**arguments)
+
+
+class LeadProofLogicTests(unittest.TestCase):
+    def test_header_signature_ignores_case_and_repeated_whitespace(self):
+        self.assertEqual(
+            make_header_signature(["First Name", "Email"]),
+            make_header_signature([" first   name ", "EMAIL"]),
+        )
+
+    def test_email_format_check_can_be_disabled(self):
+        frame = pd.DataFrame({"Company": ["Acme"], "Email": ["not-an-email"]})
+        cleaned, flagged, _ = run_processing(
+            frame,
+            company_col="Company",
+            email_col="Email",
+            validation_options={"email_format": False},
+        )
+        self.assertEqual(cleaned.loc[0, "LeadProof Flags"], "")
+        self.assertTrue(flagged.empty)
+
+    def test_duplicate_email_check_can_be_disabled(self):
+        frame = pd.DataFrame({
+            "Company": ["Acme", "Northstar"],
+            "Email": ["hello@example.com", "hello@example.com"],
+        })
+        cleaned, flagged, _ = run_processing(
+            frame,
+            company_col="Company",
+            email_col="Email",
+            validation_options={"duplicate_emails": False},
+        )
+        self.assertFalse(
+            cleaned["LeadProof Flags"].str.contains(
+                "Email appears more than once", regex=False
+            ).any()
+        )
+        self.assertTrue(flagged.empty)
+
+    def test_exact_duplicate_check_can_be_disabled(self):
+        frame = pd.DataFrame({
+            "Company": ["Acme", "Acme"],
+            "Email": ["hello@example.com", "hello@example.com"],
+        })
+        cleaned, flagged, _ = run_processing(
+            frame,
+            company_col="Company",
+            email_col="Email",
+            validation_options=ALL_CHECKS_OFF,
+        )
+        self.assertFalse(
+            cleaned["LeadProof Flags"].str.contains(
+                "Exact duplicate record", regex=False
+            ).any()
+        )
+        self.assertTrue(flagged.empty)
+
+    def test_fuzzy_name_check_flags_similar_companies_without_deleting_rows(self):
+        frame = pd.DataFrame({
+            "Company": ["Northstar Media", "Northstar Meda", "Blue Oak"],
+        })
+        cleaned, flagged, summary = run_processing(
+            frame,
+            company_col="Company",
+            validation_options=ALL_CHECKS_OFF,
+            fuzzy_duplicates=True,
+            fuzzy_threshold=85,
+        )
+        self.assertEqual(len(cleaned), 3)
+        self.assertEqual(summary["processed_rows"], 3)
+        self.assertTrue(
+            cleaned.loc[0, "LeadProof Flags"].find("Possible name duplicate") >= 0
+        )
+        self.assertTrue(
+            cleaned.loc[1, "LeadProof Flags"].find("Possible name duplicate") >= 0
+        )
+        self.assertFalse(
+            cleaned.loc[2, "LeadProof Flags"].find("Possible name duplicate") >= 0
+        )
+        self.assertEqual(len(flagged), 2)
+
+    def test_fuzzy_check_refuses_oversized_batches(self):
+        frame = pd.DataFrame({"Company": ["Acme"] * 3001})
+        with self.assertRaisesRegex(ValueError, "limited to 3,000 rows"):
+            run_processing(
+                frame,
+                company_col="Company",
+                validation_options=ALL_CHECKS_OFF,
+                fuzzy_duplicates=True,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
