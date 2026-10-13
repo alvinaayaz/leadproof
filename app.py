@@ -384,19 +384,29 @@ def process_leads(
                 "Turn it off or upload a smaller batch."
             )
 
-        if record_type == "Business leads" and company_col and company_col in df.columns:
+        if record_type == "Business leads":
+            if not company_col or company_col not in df.columns:
+                raise ValueError(
+                    "Map a company name column to use likely-duplicate name checking."
+                )
             name_values = df[company_col].astype(str).str.strip()
-        elif record_type == "Contact lists" and first_name_col and last_name_col:
-            if first_name_col in df.columns and last_name_col in df.columns:
-                name_values = (
-                    df[first_name_col].astype(str).str.strip()
-                    + " "
-                    + df[last_name_col].astype(str).str.strip()
-                ).str.strip()
-            else:
-                name_values = pd.Series([""] * len(df), index=df.index)
+        elif record_type == "Contact lists":
+            if (
+                not first_name_col
+                or not last_name_col
+                or first_name_col not in df.columns
+                or last_name_col not in df.columns
+            ):
+                raise ValueError(
+                    "Map both first and last name columns to use likely-duplicate checking."
+                )
+            name_values = (
+                df[first_name_col].astype(str).str.strip()
+                + " "
+                + df[last_name_col].astype(str).str.strip()
+            ).str.strip()
         else:
-            name_values = pd.Series([""] * len(df), index=df.index)
+            raise ValueError("Unsupported record type for likely-duplicate checking.")
 
         def normalize_match(value):
             return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
