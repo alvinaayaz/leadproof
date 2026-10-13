@@ -977,6 +977,6 @@ if (
 
 st.divider()
 st.caption(
-    "LeadProof V2 · Format checks are not proof of deliverability, 
+    "LeadProof V2 · Format checks are not proof of deliverability, "
     "phone ownership, website availability, or business legitimacy."
 )
