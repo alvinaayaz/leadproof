@@ -8,3 +8,6 @@ __pycache__/
 app.backup.py
 app.before-*.py
 patch_*.py
+
+# Local saved column preferences
+.leadproof_mappings.sqlite3

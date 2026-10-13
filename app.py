@@ -1,7 +1,11 @@
 
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import urlparse
+import hashlib
+import json
 import re
+import sqlite3
 
 import pandas as pd
 import streamlit as st
@@ -51,6 +55,92 @@ def find_column(columns, keywords):
         if any(word in header for word in keywords):
             return column
     return None
+
+
+def normalize_header(value):
+    """Normalize a header for stable matching across uploads."""
+    return re.sub(r"\s+", " ", str(value).strip()).casefold()
+
+
+def make_header_signature(columns):
+    """Fingerprint the normalized header structure, not uploaded records."""
+    normalized = [normalize_header(column) for column in columns]
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+MAPPING_DB_PATH = (
+    Path(__file__).resolve().parent / ".leadproof_mappings.sqlite3"
+)
+
+
+def load_mapping_preferences(signature):
+    """Load header-specific preferences, falling back safely if unavailable."""
+    cache = st.session_state.setdefault("leadproof_mapping_cache", {})
+    if signature in cache:
+        return cache[signature]
+
+    try:
+        with sqlite3.connect(MAPPING_DB_PATH, timeout=1) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mapping_preferences (
+                    header_signature TEXT PRIMARY KEY,
+                    mappings_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            row = connection.execute(
+                "SELECT mappings_json FROM mapping_preferences "
+                "WHERE header_signature = ?",
+                (signature,),
+            ).fetchone()
+
+        mappings = json.loads(row[0]) if row else None
+        cache[signature] = mappings
+        return mappings
+    except (sqlite3.Error, OSError, json.JSONDecodeError):
+        return cache.get(signature)
+
+
+def save_mapping_preferences(signature, mappings):
+    """Save column choices only; never save uploaded row data."""
+    cache = st.session_state.setdefault("leadproof_mapping_cache", {})
+    cache[signature] = mappings
+
+    try:
+        with sqlite3.connect(MAPPING_DB_PATH, timeout=1) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mapping_preferences (
+                    header_signature TEXT PRIMARY KEY,
+                    mappings_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO mapping_preferences
+                    (header_signature, mappings_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(header_signature) DO UPDATE SET
+                    mappings_json = excluded.mappings_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    signature,
+                    json.dumps(mappings, ensure_ascii=False),
+                ),
+            )
+        return True
+    except (sqlite3.Error, OSError):
+        return False
 
 
 def normalize_email(value):
@@ -459,6 +549,8 @@ record_type = st.radio(
 
 columns = list(source_df.columns)
 options = ["None"] + columns
+header_signature = make_header_signature(columns)
+saved_mappings = load_mapping_preferences(header_signature)
 
 email_guess = find_column(columns, ["email", "e-mail", "mail"])
 phone_guess = find_column(
@@ -482,8 +574,26 @@ last_name_guess = find_column(
     ["last_name", "last name", "lastname", "family_name", "family name", "surname"],
 )
 
-def default_index(guess):
+def default_index(field, guess):
+    if saved_mappings is not None and field in saved_mappings:
+        saved_value = saved_mappings[field]
+
+        # A saved None is intentional; don't replace it with a guess.
+        if saved_value is None:
+            return 0
+
+        for index, option in enumerate(options):
+            if (
+                option != "None"
+                and normalize_header(option) == saved_value
+            ):
+                return index
+
     return options.index(guess) if guess in options else 0
+
+
+def mapping_value(choice):
+    return None if choice == "None" else normalize_header(choice)
 
 with st.form("mapping_form"):
     col1, col2 = st.columns(2)
@@ -492,34 +602,40 @@ with st.form("mapping_form"):
         company_choice = st.selectbox(
             "Company name column",
             options,
-            index=default_index(company_guess),
+            index=default_index("company", company_guess),
+            key=f"mapping_company_{header_signature[:12]}",
         )
         email_choice = st.selectbox(
             "Email column",
             options,
-            index=default_index(email_guess),
+            index=default_index("email", email_guess),
+            key=f"mapping_email_{header_signature[:12]}",
         )
         first_name_choice = st.selectbox(
             "First name column",
             options,
-            index=default_index(first_name_guess),
+            index=default_index("first_name", first_name_guess),
+            key=f"mapping_first_name_{header_signature[:12]}",
         )
 
     with col2:
         phone_choice = st.selectbox(
             "Phone column",
             options,
-            index=default_index(phone_guess),
+            index=default_index("phone", phone_guess),
+            key=f"mapping_phone_{header_signature[:12]}",
         )
         website_choice = st.selectbox(
             "Website column",
             options,
-            index=default_index(website_guess),
+            index=default_index("website", website_guess),
+            key=f"mapping_website_{header_signature[:12]}",
         )
         last_name_choice = st.selectbox(
             "Last name column",
             options,
-            index=default_index(last_name_guess),
+            index=default_index("last_name", last_name_guess),
+            key=f"mapping_last_name_{header_signature[:12]}",
         )
 
     remove_blanks = st.checkbox(
@@ -561,6 +677,19 @@ if run_processing:
             remove_blank_rows=remove_blanks,
         )
 
+        mapping_saved = save_mapping_preferences(
+            header_signature,
+            {
+                "company": mapping_value(company_choice),
+                "email": mapping_value(email_choice),
+                "first_name": mapping_value(first_name_choice),
+                "phone": mapping_value(phone_choice),
+                "website": mapping_value(website_choice),
+                "last_name": mapping_value(last_name_choice),
+            },
+        )
+        st.session_state["leadproof_mapping_save_status"] = mapping_saved
+
         st.session_state["leadproof_result"] = {
             "cleaned": cleaned_df,
             "flagged": flagged_df,
@@ -568,6 +697,13 @@ if run_processing:
             "filename": uploaded_file.name,
             "record_type": record_type,
         }
+        if mapping_saved:
+            st.caption("Column mapping preferences saved for this header structure.")
+        else:
+            st.caption(
+                "Column mappings are remembered for this session, but "
+                "persistent storage is unavailable."
+            )
     except Exception as exc:
         st.error(f"Processing failed safely: {exc}")
 
