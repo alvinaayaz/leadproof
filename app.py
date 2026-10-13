@@ -259,8 +259,8 @@ def process_leads(
     fuzzy_duplicates=False,
     fuzzy_threshold=90,
 ):
-    # All checks remain enabled by default for backwards compatibility.
-    validation_options = validation_options or {
+    # All checks remain enabled by default; callers may override only selected checks.
+    default_validation_options = {
         "required_fields": True,
         "missing_email": True,
         "email_format": True,
@@ -270,6 +270,8 @@ def process_leads(
         "website_format": True,
         "exact_duplicates": True,
     }
+    default_validation_options.update(validation_options or {})
+    validation_options = default_validation_options
 
     # Work on a copy. The uploaded data is never overwritten.
     df = source_df.copy()
