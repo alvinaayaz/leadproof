@@ -2,7 +2,10 @@ import ast
 import hashlib
 import json
 import re
+import sqlite3
+import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,6 +19,8 @@ FUNCTION_NAMES = {
     "clean_text",
     "normalize_header",
     "make_header_signature",
+    "load_mapping_preferences",
+    "save_mapping_preferences",
     "normalize_email",
     "normalize_website",
     "website_format_valid",
@@ -40,6 +45,7 @@ NAMESPACE = {
     "urlparse": urlparse,
     "hashlib": hashlib,
     "json": json,
+    "sqlite3": sqlite3,
     "fuzz": fuzz,
     "process": rapid_process,
 }
@@ -83,6 +89,30 @@ def run_processing(frame, **overrides):
 
 
 class LeadProofLogicTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        NAMESPACE["MAPPING_DB_PATH"] = Path(self.temp_dir.name) / "mappings.sqlite3"
+        NAMESPACE["st"] = SimpleNamespace(session_state={})
+
+    def test_mapping_preferences_survive_a_fresh_session_cache(self):
+        signature = make_header_signature(["Company", "Email"])
+        mappings = {
+            "company": "company",
+            "email": "email",
+            "phone": None,
+        }
+        self.assertTrue(
+            NAMESPACE["save_mapping_preferences"](signature, mappings)
+        )
+
+        # Simulate a new Streamlit session by clearing its in-memory cache.
+        NAMESPACE["st"].session_state = {}
+        self.assertEqual(
+            NAMESPACE["load_mapping_preferences"](signature),
+            mappings,
+        )
+
     def test_header_signature_ignores_case_and_repeated_whitespace(self):
         self.assertEqual(
             make_header_signature(["First Name", "Email"]),
