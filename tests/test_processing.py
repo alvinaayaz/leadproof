@@ -170,6 +170,34 @@ class LeadProofLogicTests(unittest.TestCase):
                 fuzzy_duplicates=True,
             )
 
+    def test_custom_regex_flags_only_nonmatching_nonempty_values(self):
+        frame = pd.DataFrame({"Account ID": ["AB-1234", "wrong", ""]})
+        cleaned, flagged, _ = run_processing(
+            frame,
+            validation_options=ALL_CHECKS_OFF,
+            custom_regex_enabled=True,
+            custom_regex_col="Account ID",
+            custom_regex_pattern=r"^[A-Z]{2}-\\d{4}$",
+        )
+        self.assertEqual(len(cleaned), 3)
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(
+            cleaned.loc[1, "LeadProof Flags"],
+            "Custom format needs review (Account ID)",
+        )
+        self.assertEqual(cleaned.loc[2, "LeadProof Flags"], "")
+
+    def test_custom_regex_rejects_invalid_pattern(self):
+        frame = pd.DataFrame({"ID": ["abc"]})
+        with self.assertRaisesRegex(ValueError, "Custom regex pattern is invalid"):
+            run_processing(
+                frame,
+                validation_options=ALL_CHECKS_OFF,
+                custom_regex_enabled=True,
+                custom_regex_col="ID",
+                custom_regex_pattern="[",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
