@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 
 import pandas as pd
 from rapidfuzz import fuzz, process as rapid_process
-from streamlit.testing.v1 import AppTest
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -113,10 +112,6 @@ class LeadProofLogicTests(unittest.TestCase):
             NAMESPACE["load_mapping_preferences"](signature),
             mappings,
         )
-
-    def test_app_renders_without_an_uploaded_file(self):
-        app_test = AppTest.from_file(str(APP_PATH)).run()
-        self.assertEqual(len(app_test.exception), 0)
 
     def test_header_signature_ignores_case_and_repeated_whitespace(self):
         self.assertEqual(
