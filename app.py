@@ -254,7 +254,7 @@ def calculate_health_score(summary):
     """Percentage of processed records without active validation flags."""
     total = int(summary.get("processed_rows", 0))
     ready = int(summary.get("ready_rows", 0))
-    return round((ready / total) * 100) if total else 100
+    return round((ready / total) * 100) if total else 0
 
 
 def read_uploaded_file(uploaded_file):
@@ -352,6 +352,10 @@ def process_leads(
     blank_count = int(blank_mask.sum())
 
     if remove_blank_rows:
+        keep_mask = (~blank_mask).tolist()
+        auto_fix_notes = [
+            notes for notes, keep in zip(auto_fix_notes, keep_mask) if keep
+        ]
         df = df.loc[~blank_mask].copy()
 
     # Keep existing safe email/website normalization. With opt-in auto-fixes,
@@ -1136,10 +1140,31 @@ if (
                         if row_index in edited_base.index:
                             for col in editable_columns:
                                 edited_base.at[row_index, col] = edited_rows.at[row_index, col]
+                    prior_auto_fixes = cleaned_df.get(
+                        "LeadProof Auto-Fixes", pd.Series("", index=cleaned_df.index)
+                    )
                     rechecked_df, rechecked_flagged, rechecked_summary = process_leads(
                         source_df=edited_base,
                         **result["processing_args"],
                     )
+                    if "LeadProof Auto-Fixes" in rechecked_df.columns:
+                        for row_index in rechecked_df.index:
+                            previous = str(prior_auto_fixes.get(row_index, "") or "")
+                            current = str(rechecked_df.at[row_index, "LeadProof Auto-Fixes"] or "")
+                            notes = list(dict.fromkeys(
+                                [part.strip() for part in (previous + "; " + current).split(";") if part.strip()]
+                            ))
+                            rechecked_df.at[row_index, "LeadProof Auto-Fixes"] = "; ".join(notes)
+                        rechecked_flagged = rechecked_df.loc[
+                            rechecked_df["LeadProof Flags"].ne("")
+                        ].copy()
+                        rechecked_summary["auto_fixed_rows"] = int(
+                            rechecked_df["LeadProof Auto-Fixes"].ne("").sum()
+                        )
+                        rechecked_summary["auto_fix_count"] = int(sum(
+                            len([part for part in str(value).split(";") if part.strip()])
+                            for value in rechecked_df["LeadProof Auto-Fixes"]
+                        ))
                     result["cleaned"] = rechecked_df
                     result["flagged"] = rechecked_flagged
                     result["summary"] = rechecked_summary
