@@ -85,8 +85,10 @@ def load_mapping_preferences(signature):
     if signature in cache:
         return cache[signature]
 
+    connection = None
     try:
-        with sqlite3.connect(MAPPING_DB_PATH, timeout=1) as connection:
+        connection = sqlite3.connect(MAPPING_DB_PATH, timeout=1)
+        with connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS mapping_preferences (
@@ -107,6 +109,9 @@ def load_mapping_preferences(signature):
         return mappings
     except (sqlite3.Error, OSError, json.JSONDecodeError):
         return cache.get(signature)
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def save_mapping_preferences(signature, mappings):
@@ -114,8 +119,10 @@ def save_mapping_preferences(signature, mappings):
     cache = st.session_state.setdefault("leadproof_mapping_cache", {})
     cache[signature] = mappings
 
+    connection = None
     try:
-        with sqlite3.connect(MAPPING_DB_PATH, timeout=1) as connection:
+        connection = sqlite3.connect(MAPPING_DB_PATH, timeout=1)
+        with connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS mapping_preferences (
@@ -142,7 +149,9 @@ def save_mapping_preferences(signature, mappings):
         return True
     except (sqlite3.Error, OSError):
         return False
-
+    finally:
+        if connection is not None:
+            connection.close()
 
 def normalize_email(value):
     if not isinstance(value, str):
