@@ -15,7 +15,10 @@ LeadProof is a lightweight data-quality workspace for business leads and contact
   - Repeated email addresses and exact duplicate rows
 - Optional fuzzy name matching for likely duplicate company/contact names, with an adjustable similarity threshold. This check is limited to 3,000 rows per run and never deletes or merges records.
 - Optional custom regex validation for IDs, postal codes, and other user-defined formats.
-- Export processed data and review lists as CSV, or an Excel report with Processed Leads, Needs Review, and Audit Summary sheets.
+- Opt-in safe auto-fixes with a per-row audit trail for email/website normalization and phone formatting. Phone cleanup preserves digits and an existing leading `+`; it does not guess a country code or claim E.164 validity.
+- Edit flagged rows inline in the app, save changes, and rerun the same checks across the updated list before exporting.
+- A Lead Health Score showing the percentage of processed rows with no active validation flags, plus a chart breaking down flag types.
+- Export processed data and review lists as CSV, or an Excel report with Processed Leads, Needs Review, and an Audit Summary containing the health score and flag counts.
 - Automated unit tests run through GitHub Actions on pushes and pull requests.
 
 ## Run locally
@@ -40,6 +43,9 @@ Run automated checks locally with:
 - Fuzzy matching is a similarity hint, not proof that two records refer to the same entity.
 - Custom regex rules only validate the pattern the user supplies; they do not prove the underlying data is correct.
 - Completely blank rows can be removed when the user enables that option. Other records are flagged for review, not automatically deleted.
+- The Lead Health Score is a simple, explainable completeness/validation indicator: the percentage of processed rows without active flags. It is not a measure of lead authenticity or business quality.
+- Email and website normalization are part of the existing processing flow. The opt-in auto-fix setting adds phone formatting cleanup and records detected formatting changes in the `LeadProof Auto-Fixes` column. Phone formatting does not infer a country code, and no correction can guarantee the underlying value is accurate.
+- Inline edits update the current session's results. Download the updated report to keep the edits; the original upload itself is not modified.
 - Mapping preferences store column names and header signatures, not uploaded row data. The local SQLite file must be writable. Some hosted platforms use ephemeral filesystems, so saved preferences may not survive a redeploy or restart.
 - Uploaded data is processed in the app session. Review your hosting provider's privacy and file-handling practices before uploading sensitive or personal data.
 
