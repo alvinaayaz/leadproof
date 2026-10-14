@@ -28,6 +28,7 @@ FUNCTION_NAMES = {
     "phone_format_valid",
     "process_leads",
     "upload_content_signature",
+    "processing_config_signature",
 }
 FUNCTION_NODES = [
     node for node in TREE.body
@@ -57,6 +58,7 @@ exec(
 process_leads = NAMESPACE["process_leads"]
 make_header_signature = NAMESPACE["make_header_signature"]
 upload_content_signature = NAMESPACE["upload_content_signature"]
+processing_config_signature = NAMESPACE["processing_config_signature"]
 
 
 ALL_CHECKS_OFF = {
@@ -99,6 +101,27 @@ class LeadProofLogicTests(unittest.TestCase):
         self.assertEqual(
             upload_content_signature(b"same file"),
             upload_content_signature(b"same file"),
+        )
+
+    def test_processing_config_signature_is_stable_and_changes_with_settings(self):
+        base = {
+            "record_type": "Business leads",
+            "email_format": True,
+            "threshold": 90,
+        }
+        reordered = {
+            "threshold": 90,
+            "email_format": True,
+            "record_type": "Business leads",
+        }
+        changed = {**base, "threshold": 85}
+        self.assertEqual(
+            processing_config_signature(base),
+            processing_config_signature(reordered),
+        )
+        self.assertNotEqual(
+            processing_config_signature(base),
+            processing_config_signature(changed),
         )
 
     def setUp(self):
