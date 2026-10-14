@@ -35,6 +35,16 @@ Run automated checks locally with:
 
 `python -m unittest discover -s tests -v`
 
+## Deploy to Streamlit Community Cloud
+
+1. Push this repository to GitHub.
+2. Open https://share.streamlit.io/ and create a new app.
+3. Select this repository, the `master` branch, and `app.py` as the entry point.
+4. Let Streamlit Cloud install dependencies from `requirements.txt`.
+5. Verify CSV and Excel uploads, processing, and report downloads.
+
+Column-mapping preferences use a local SQLite database and may not persist across hosted app restarts or redeployments.
+
 ## Important limitations
 
 - Email checks validate syntax only; they do not confirm deliverability or mailbox ownership.
