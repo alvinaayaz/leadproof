@@ -74,6 +74,23 @@ def make_header_signature(columns):
     return hashlib.sha256(payload).hexdigest()
 
 
+def upload_content_signature(content):
+    """Fingerprint file bytes so cached results match the exact uploaded file."""
+    return hashlib.sha256(content).hexdigest()
+
+
+def processing_config_signature(config):
+    """Fingerprint active settings so results cannot outlive their configuration."""
+    payload = json.dumps(
+        config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 MAPPING_DB_PATH = (
     Path(__file__).resolve().parent / ".leadproof_mappings.sqlite3"
 )
@@ -218,6 +235,37 @@ def phone_format_valid(value):
     return 7 <= len(digits) <= 15
 
 
+def normalize_phone(value):
+    """Standardize presentation without guessing a country code or changing digits."""
+    if not isinstance(value, str):
+        return value
+    value = value.strip()
+    if not value:
+        return value
+    digits = re.sub(r"\D", "", value)
+    if not digits:
+        return value
+    return ("+" if value.startswith("+") else "") + digits
+
+
+def build_flag_breakdown(cleaned_df):
+    """Count validation flags across records; one row may have multiple flags."""
+    counts = {}
+    if cleaned_df.empty or "LeadProof Flags" not in cleaned_df.columns:
+        return counts
+    for value in cleaned_df["LeadProof Flags"].fillna("").astype(str):
+        for flag in filter(None, (part.strip() for part in value.split(";"))):
+            counts[flag] = counts.get(flag, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold())))
+
+
+def calculate_health_score(summary):
+    """Percentage of processed records without active validation flags."""
+    total = int(summary.get("processed_rows", 0))
+    ready = int(summary.get("ready_rows", 0))
+    return round((ready / total) * 100) if total else 0
+
+
 def read_uploaded_file(uploaded_file):
     filename = uploaded_file.name.lower()
     content = uploaded_file.getvalue()
@@ -270,6 +318,7 @@ def process_leads(
     custom_regex_enabled=False,
     custom_regex_col=None,
     custom_regex_pattern="",
+    auto_fix_enabled=False,
 ):
     # All checks remain enabled by default; callers may override only selected checks.
     default_validation_options = {
@@ -299,6 +348,7 @@ def process_leads(
     for col in df.columns:
         df[col] = df[col].map(clean_text)
 
+    auto_fix_notes = [[] for _ in range(len(df))]
     original_row_count = len(df)
 
     # Blank means every cell is empty after trimming.
@@ -311,14 +361,41 @@ def process_leads(
     blank_count = int(blank_mask.sum())
 
     if remove_blank_rows:
+        keep_mask = (~blank_mask).tolist()
+        auto_fix_notes = [
+            notes for notes, keep in zip(auto_fix_notes, keep_mask) if keep
+        ]
         df = df.loc[~blank_mask].copy()
 
-    # Normalize only fields selected by the user.
+    # Keep existing safe email/website normalization. With opt-in auto-fixes,
+    # record exactly which selected fields changed and standardize phone formatting
+    # without guessing a country code.
     if email_col and email_col in df.columns:
+        before = df[email_col].copy()
         df[email_col] = df[email_col].map(normalize_email)
+        if auto_fix_enabled:
+            for position, (old, new) in enumerate(zip(before.tolist(), df[email_col].tolist())):
+                if old != new:
+                    auto_fix_notes[position].append("Email trimmed/lowercased")
 
     if website_col and website_col in df.columns:
+        before = df[website_col].copy()
         df[website_col] = df[website_col].map(normalize_website)
+        if auto_fix_enabled:
+            for position, (old, new) in enumerate(zip(before.tolist(), df[website_col].tolist())):
+                if old != new:
+                    old_text = str(old).strip()
+                    if old_text and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", old_text):
+                        auto_fix_notes[position].append("Website scheme added")
+                    else:
+                        auto_fix_notes[position].append("Website trimmed")
+
+    if auto_fix_enabled and phone_col and phone_col in df.columns:
+        before = df[phone_col].copy()
+        df[phone_col] = df[phone_col].map(normalize_phone)
+        for position, (old, new) in enumerate(zip(before.tolist(), df[phone_col].tolist())):
+            if old != new:
+                auto_fix_notes[position].append("Phone formatting standardized")
 
     flags_by_row = [[] for _ in range(len(df))]
 
@@ -463,6 +540,9 @@ def process_leads(
             f"Custom format needs review ({custom_regex_col})",
         )
 
+    # Keep the auto-fix audit separate: a formatting change alone is not a validation failure.
+    df["LeadProof Auto-Fixes"] = ["; ".join(notes) for notes in auto_fix_notes]
+
     # Add review results without removing or replacing original fields.
     df["LeadProof Status"] = [
         "Review needed" if row_flags else "Ready for review"
@@ -491,7 +571,11 @@ def process_leads(
             .str.contains("Exact duplicate record", regex=False)
             .sum()
         ),
+        "auto_fixed_rows": int(df["LeadProof Auto-Fixes"].ne("").sum()),
+        "auto_fix_count": int(sum(len(notes) for notes in auto_fix_notes)),
     }
+    summary["health_score"] = calculate_health_score(summary)
+    summary["flag_breakdown"] = build_flag_breakdown(df)
 
     return df, flagged_df, summary
 
@@ -499,12 +583,17 @@ def process_leads(
 def build_excel(cleaned_df, flagged_df, summary):
     output = BytesIO()
 
-    summary_df = pd.DataFrame(
-        [
-            {"Metric": key, "Value": value}
-            for key, value in summary.items()
-        ]
+    summary_rows = [
+        {"Metric": key, "Value": value}
+        for key, value in summary.items()
+        if key != "flag_breakdown"
+    ]
+    summary_rows.append({"Metric": "Flag breakdown", "Value": ""})
+    summary_rows.extend(
+        {"Metric": f"Flag: {flag}", "Value": count}
+        for flag, count in summary.get("flag_breakdown", {}).items()
     )
+    summary_df = pd.DataFrame(summary_rows)
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         cleaned_df.to_excel(
@@ -536,7 +625,7 @@ with st.sidebar:
     st.caption("Lead and contact data quality")
     st.divider()
     st.markdown("**Current version**")
-    st.caption("V2 · Configurable data quality checks")
+    st.caption("V3 · Auto-fixes, inline review, and lead health analytics")
     st.info(
         "Website checks validate URL format only; they do not visit "
         "websites or confirm that a site is live."
@@ -631,6 +720,8 @@ if len(set(source_df.columns)) != len(source_df.columns):
         "Please rename them in Excel and upload the file again."
     )
     st.stop()
+
+upload_signature = upload_content_signature(uploaded_file.getvalue())
 
 st.success(
     f"Loaded **{len(source_df):,} rows** and "
@@ -834,13 +925,46 @@ with st.form("mapping_form"):
         ),
     )
 
+    auto_fix_enabled = st.checkbox(
+        "Apply safe auto-fixes and record changes",
+        value=False,
+        help=(
+            "Standardizes selected phone values without guessing a country code, "
+            "and records selected email/website normalization in the audit trail. "
+            "Existing email and website normalization is preserved."
+        ),
+    )
+
     run_processing = st.form_submit_button(
         "Process lead list",
         type="primary",
         use_container_width=True,
     )
 
+current_config_signature = processing_config_signature(
+    {
+        "record_type": record_type,
+        "company": company_choice,
+        "email": email_choice,
+        "phone": phone_choice,
+        "website": website_choice,
+        "first_name": first_name_choice,
+        "last_name": last_name_choice,
+        "remove_blank_rows": remove_blanks,
+        "auto_fix_enabled": auto_fix_enabled,
+        "validation_options": validation_options,
+        "fuzzy_duplicates": check_fuzzy_duplicates,
+        "fuzzy_threshold": fuzzy_threshold,
+        "custom_regex_enabled": check_custom_regex,
+        "custom_regex_col": custom_regex_col,
+        "custom_regex_pattern": custom_regex_pattern,
+    }
+)
+
 if run_processing:
+    # Clear previous output before attempting to process this upload again.
+    st.session_state.pop("leadproof_result", None)
+
     email_col = None if email_choice == "None" else email_choice
     phone_col = None if phone_choice == "None" else phone_choice
     website_col = None if website_choice == "None" else website_choice
@@ -870,6 +994,7 @@ if run_processing:
                 None if custom_regex_col == "None" else custom_regex_col
             ),
             custom_regex_pattern=custom_regex_pattern,
+            auto_fix_enabled=auto_fix_enabled,
         )
 
         mapping_saved = save_mapping_preferences(
@@ -890,7 +1015,26 @@ if run_processing:
             "flagged": flagged_df,
             "summary": summary,
             "filename": uploaded_file.name,
+            "file_signature": upload_signature,
+            "config_signature": current_config_signature,
             "record_type": record_type,
+            "processing_args": {
+                "email_col": email_col,
+                "phone_col": phone_col,
+                "website_col": website_col,
+                "company_col": company_col,
+                "first_name_col": first_name_col,
+                "last_name_col": last_name_col,
+                "record_type": record_type,
+                "remove_blank_rows": remove_blanks,
+                "validation_options": validation_options.copy(),
+                "fuzzy_duplicates": check_fuzzy_duplicates,
+                "fuzzy_threshold": fuzzy_threshold,
+                "custom_regex_enabled": check_custom_regex,
+                "custom_regex_col": None if custom_regex_col == "None" else custom_regex_col,
+                "custom_regex_pattern": custom_regex_pattern,
+                "auto_fix_enabled": auto_fix_enabled,
+            },
         }
         if mapping_saved:
             st.caption("Column mapping preferences saved for this header structure.")
@@ -906,7 +1050,8 @@ result = st.session_state.get("leadproof_result")
 
 if (
     result
-    and result["filename"] == uploaded_file.name
+    and result.get("file_signature") == upload_signature
+    and result.get("config_signature") == current_config_signature
     and result.get("record_type") == record_type
 ):
     cleaned_df = result["cleaned"]
@@ -916,11 +1061,33 @@ if (
     st.divider()
     st.markdown("### 3. Results")
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Processed rows", f"{summary['processed_rows']:,}")
     m2.metric("Ready for review", f"{summary['ready_rows']:,}")
     m3.metric("Flagged rows", f"{summary['flagged_rows']:,}")
-    m4.metric("Exact duplicate rows", f"{summary['exact_duplicate_rows']:,}")
+    m4.metric("Lead health score", f"{summary['health_score']}/100")
+    m5.metric("Auto-fixed rows", f"{summary['auto_fixed_rows']:,}")
+
+    health_left, health_right = st.columns([1, 2])
+    with health_left:
+        st.progress(summary["health_score"] / 100, text=f"Lead health · {summary['health_score']}/100")
+        st.caption("Score = records with no active validation flags ÷ processed records. A format pass is not proof a lead is genuine.")
+    with health_right:
+        breakdown = summary.get("flag_breakdown", {})
+        if breakdown:
+            st.markdown("**Flag breakdown**")
+            chart_df = pd.DataFrame(
+                [{"Issue type": label, "Records": count} for label, count in breakdown.items()]
+            ).set_index("Issue type")
+            st.bar_chart(chart_df)
+        else:
+            st.success("No validation flags to chart.")
+
+    if summary["auto_fix_count"]:
+        st.caption(
+            f"Recorded {summary['auto_fix_count']:,} safe formatting changes across "
+            f"{summary['auto_fixed_rows']:,} rows in the LeadProof Auto-Fixes column."
+        )
 
     if summary["blank_rows_removed"]:
         st.caption(
@@ -952,14 +1119,71 @@ if (
             st.success("No issues were flagged by the selected checks.")
         else:
             st.caption(
-                "Flags indicate records to inspect. They do not automatically "
-                "mean a business or contact is invalid."
+                "Edit cells directly below, then save to rerun the same validation "
+                "checks across the updated list. Changes stay in this session until exported."
             )
-            st.dataframe(
-                flagged_df,
+            editable_columns = [
+                col for col in cleaned_df.columns
+                if col not in ("LeadProof Status", "LeadProof Flags", "LeadProof Auto-Fixes")
+            ]
+            editor_input = flagged_df.copy()
+            edited_rows = st.data_editor(
+                editor_input,
                 use_container_width=True,
                 hide_index=True,
+                num_rows="fixed",
+                key=f"leadproof_review_editor_{upload_signature[:12]}_{current_config_signature[:8]}_{result.get('editor_revision', 0)}",
+                column_config={
+                    "LeadProof Status": st.column_config.TextColumn(disabled=True),
+                    "LeadProof Flags": st.column_config.TextColumn(disabled=True),
+                    "LeadProof Auto-Fixes": st.column_config.TextColumn(disabled=True),
+                },
             )
+            if st.button("Save edits & recheck all rows", type="primary", key="save_review_edits"):
+                try:
+                    edited_base = cleaned_df.drop(
+                        columns=["LeadProof Status", "LeadProof Flags", "LeadProof Auto-Fixes"],
+                        errors="ignore",
+                    ).copy()
+                    for row_index in edited_rows.index:
+                        if row_index in edited_base.index:
+                            for col in editable_columns:
+                                edited_base.at[row_index, col] = edited_rows.at[row_index, col]
+                    prior_auto_fixes = cleaned_df.get(
+                        "LeadProof Auto-Fixes", pd.Series("", index=cleaned_df.index)
+                    )
+                    rechecked_df, rechecked_flagged, rechecked_summary = process_leads(
+                        source_df=edited_base,
+                        **result["processing_args"],
+                    )
+                    if "LeadProof Auto-Fixes" in rechecked_df.columns:
+                        for row_index in rechecked_df.index:
+                            previous = str(prior_auto_fixes.get(row_index, "") or "")
+                            current = str(rechecked_df.at[row_index, "LeadProof Auto-Fixes"] or "")
+                            notes = list(dict.fromkeys(
+                                [part.strip() for part in (previous + "; " + current).split(";") if part.strip()]
+                            ))
+                            rechecked_df.at[row_index, "LeadProof Auto-Fixes"] = "; ".join(notes)
+                        rechecked_flagged = rechecked_df.loc[
+                            rechecked_df["LeadProof Flags"].ne("")
+                        ].copy()
+                        rechecked_summary["auto_fixed_rows"] = int(
+                            rechecked_df["LeadProof Auto-Fixes"].ne("").sum()
+                        )
+                        rechecked_summary["auto_fix_count"] = int(sum(
+                            len([part for part in str(value).split(";") if part.strip()])
+                            for value in rechecked_df["LeadProof Auto-Fixes"]
+                        ))
+                    result["cleaned"] = rechecked_df
+                    result["flagged"] = rechecked_flagged
+                    result["summary"] = rechecked_summary
+                    result["user_edited"] = True
+                    result["editor_revision"] = int(result.get("editor_revision", 0)) + 1
+                    st.session_state["leadproof_result"] = result
+                    st.success("Edits saved and validation rerun. Review the updated results above.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not apply edits safely: {exc}")
 
         st.download_button(
             "Download review CSV",
@@ -970,11 +1194,17 @@ if (
         )
 
     with tab3:
+        audit_rows = [
+            {"Metric": key.replace("_", " ").title(), "Value": value}
+            for key, value in summary.items()
+            if key != "flag_breakdown"
+        ]
+        audit_rows.extend(
+            {"Metric": f"Flag: {flag}", "Value": count}
+            for flag, count in summary.get("flag_breakdown", {}).items()
+        )
         st.dataframe(
-            pd.DataFrame(
-                [{"Metric": key, "Value": value}
-                 for key, value in summary.items()]
-            ),
+            pd.DataFrame(audit_rows),
             use_container_width=True,
             hide_index=True,
         )
@@ -995,6 +1225,6 @@ if (
 
 st.divider()
 st.caption(
-    "LeadProof V2 · Format checks are not proof of deliverability, "
+    "LeadProof V3 · Format checks are not proof of deliverability, "
     "phone ownership, website availability, or business legitimacy."
 )

@@ -23,10 +23,15 @@ FUNCTION_NAMES = {
     "save_mapping_preferences",
     "normalize_email",
     "normalize_website",
+    "normalize_phone",
+    "build_flag_breakdown",
+    "calculate_health_score",
     "website_format_valid",
     "email_format_valid",
     "phone_format_valid",
     "process_leads",
+    "upload_content_signature",
+    "processing_config_signature",
 }
 FUNCTION_NODES = [
     node for node in TREE.body
@@ -55,6 +60,8 @@ exec(
 )
 process_leads = NAMESPACE["process_leads"]
 make_header_signature = NAMESPACE["make_header_signature"]
+upload_content_signature = NAMESPACE["upload_content_signature"]
+processing_config_signature = NAMESPACE["processing_config_signature"]
 
 
 ALL_CHECKS_OFF = {
@@ -89,6 +96,87 @@ def run_processing(frame, **overrides):
 
 
 class LeadProofLogicTests(unittest.TestCase):
+    def test_phone_normalization_never_guesses_a_country_code(self):
+        normalize_phone = NAMESPACE["normalize_phone"]
+        self.assertEqual(normalize_phone(" +92 (300) 123-4567 "), "+923001234567")
+        self.assertEqual(normalize_phone("0300-123-4567"), "03001234567")
+        self.assertEqual(normalize_phone(""), "")
+
+    def test_auto_fixes_are_audited_and_align_after_blank_rows_are_removed(self):
+        frame = pd.DataFrame({
+            "Company": ["Acme", "", "Northstar"],
+            "Email": [" SALES@EXAMPLE.COM ", "", "contact@example.com"],
+            "Phone": ["+92 (300) 123-4567", "", "0300-123-4567"],
+            "Website": ["example.com", "", "https://northstar.example"],
+        })
+        cleaned, flagged, summary = run_processing(
+            frame,
+            company_col="Company",
+            email_col="Email",
+            phone_col="Phone",
+            website_col="Website",
+            validation_options=ALL_CHECKS_OFF,
+            auto_fix_enabled=True,
+            remove_blank_rows=True,
+        )
+        self.assertEqual(len(cleaned), 2)
+        self.assertEqual(cleaned.iloc[0]["Email"], "sales@example.com")
+        self.assertEqual(cleaned.iloc[0]["Website"], "https://example.com")
+        self.assertEqual(cleaned.iloc[0]["Phone"], "+923001234567")
+        self.assertIn("Email trimmed/lowercased", cleaned.iloc[0]["LeadProof Auto-Fixes"])
+        self.assertIn("Website scheme added", cleaned.iloc[0]["LeadProof Auto-Fixes"])
+        self.assertIn("Phone formatting standardized", cleaned.iloc[0]["LeadProof Auto-Fixes"])
+        self.assertEqual(summary["auto_fixed_rows"], 2)
+        self.assertEqual(summary["health_score"], 100)
+        self.assertEqual(summary["flag_breakdown"], {})
+        self.assertTrue(flagged.empty)
+
+    def test_health_score_and_flag_breakdown_use_row_flags(self):
+        cleaned = pd.DataFrame({
+            "LeadProof Flags": ["Email missing; Phone format needs review", "", "Email missing"]
+        })
+        self.assertEqual(NAMESPACE["calculate_health_score"]({
+            "processed_rows": 3, "ready_rows": 1
+        }), 33)
+        self.assertEqual(NAMESPACE["build_flag_breakdown"](cleaned), {
+            "Email missing": 2,
+            "Phone format needs review": 1,
+        })
+        self.assertEqual(NAMESPACE["calculate_health_score"]({
+            "processed_rows": 0, "ready_rows": 0
+        }), 0)
+
+    def test_upload_content_signature_changes_when_contents_change(self):
+        self.assertNotEqual(
+            upload_content_signature(b"first file"),
+            upload_content_signature(b"second file"),
+        )
+        self.assertEqual(
+            upload_content_signature(b"same file"),
+            upload_content_signature(b"same file"),
+        )
+
+    def test_processing_config_signature_is_stable_and_changes_with_settings(self):
+        base = {
+            "record_type": "Business leads",
+            "email_format": True,
+            "threshold": 90,
+        }
+        reordered = {
+            "threshold": 90,
+            "email_format": True,
+            "record_type": "Business leads",
+        }
+        changed = {**base, "threshold": 85}
+        self.assertEqual(
+            processing_config_signature(base),
+            processing_config_signature(reordered),
+        )
+        self.assertNotEqual(
+            processing_config_signature(base),
+            processing_config_signature(changed),
+        )
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
