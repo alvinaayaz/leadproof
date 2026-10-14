@@ -1070,7 +1070,7 @@ if (
             chart_df = pd.DataFrame(
                 [{"Issue type": label, "Records": count} for label, count in breakdown.items()]
             ).set_index("Issue type")
-            st.bar_chart(chart_df, horizontal=True)
+            st.bar_chart(chart_df)
         else:
             st.success("No validation flags to chart.")
 
@@ -1123,7 +1123,7 @@ if (
                 use_container_width=True,
                 hide_index=True,
                 num_rows="fixed",
-                key=f"leadproof_review_editor_{upload_signature[:12]}_{current_config_signature[:8]}",
+                key=f"leadproof_review_editor_{upload_signature[:12]}_{current_config_signature[:8]}_{result.get('editor_revision', 0)}",
                 column_config={
                     "LeadProof Status": st.column_config.TextColumn(disabled=True),
                     "LeadProof Flags": st.column_config.TextColumn(disabled=True),
@@ -1169,6 +1169,7 @@ if (
                     result["flagged"] = rechecked_flagged
                     result["summary"] = rechecked_summary
                     result["user_edited"] = True
+                    result["editor_revision"] = int(result.get("editor_revision", 0)) + 1
                     st.session_state["leadproof_result"] = result
                     st.success("Edits saved and validation rerun. Review the updated results above.")
                     st.rerun()
