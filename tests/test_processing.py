@@ -278,6 +278,30 @@ class LeadProofLogicTests(unittest.TestCase):
         )
         self.assertEqual(len(flagged), 2)
 
+    def test_fuzzy_check_skips_when_company_name_column_is_not_mapped(self):
+        frame = pd.DataFrame({
+            "Email": ["valid@example.com", "also-valid@example.com"],
+            "Phone": ["03001234567", "03007654321"],
+        })
+        cleaned, flagged, summary = run_processing(
+            frame,
+            email_col="Email",
+            phone_col="Phone",
+            validation_options={
+                **ALL_CHECKS_OFF,
+                "email_format": True,
+            },
+            fuzzy_duplicates=True,
+        )
+        self.assertEqual(summary["processed_rows"], 2)
+        self.assertEqual(len(cleaned), 2)
+        self.assertEqual(len(flagged), 0)
+        self.assertFalse(
+            cleaned["LeadProof Flags"].str.contains(
+                "Possible name duplicate", regex=False
+            ).any()
+        )
+
     def test_fuzzy_check_refuses_oversized_batches(self):
         frame = pd.DataFrame({"Company": ["Acme"] * 3001})
         with self.assertRaisesRegex(ValueError, "limited to 3,000 rows"):

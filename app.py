@@ -470,56 +470,53 @@ def process_leads(
                 "Turn it off or upload a smaller batch."
             )
 
+        name_values = None
         if record_type == "Business leads":
-            if not company_col or company_col not in df.columns:
-                raise ValueError(
-                    "Map a company name column to use likely-duplicate name checking."
-                )
-            name_values = df[company_col].astype(str).str.strip()
+            if company_col and company_col in df.columns:
+                name_values = df[company_col].astype(str).str.strip()
         elif record_type == "Contact lists":
             if (
-                not first_name_col
-                or not last_name_col
-                or first_name_col not in df.columns
-                or last_name_col not in df.columns
+                first_name_col
+                and last_name_col
+                and first_name_col in df.columns
+                and last_name_col in df.columns
             ):
-                raise ValueError(
-                    "Map both first and last name columns to use likely-duplicate checking."
-                )
-            name_values = (
-                df[first_name_col].astype(str).str.strip()
-                + " "
-                + df[last_name_col].astype(str).str.strip()
-            ).str.strip()
+                name_values = (
+                    df[first_name_col].astype(str).str.strip()
+                    + " "
+                    + df[last_name_col].astype(str).str.strip()
+                ).str.strip()
         else:
             raise ValueError("Unsupported record type for likely-duplicate checking.")
 
-        def normalize_match(value):
-            return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+        # Name similarity is optional. If the needed columns are not mapped,
+        # skip only this check and continue with the other validations.
+        if name_values is not None:
+            def normalize_match(value):
+                return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
 
-        normalized_names = name_values.map(normalize_match).tolist()
-        candidates = sorted({value for value in normalized_names if value})
-        likely_duplicate_positions = set()
+            normalized_names = name_values.map(normalize_match).tolist()
+            candidates = sorted({value for value in normalized_names if value})
+            likely_duplicate_positions = set()
 
-        for position, value in enumerate(normalized_names):
-            if not value:
-                continue
-            matches = process.extract(
-                value,
-                candidates,
-                scorer=fuzz.ratio,
-                score_cutoff=fuzzy_threshold,
-                limit=10,
-            )
-            if any(
-                candidate != value and score >= fuzzy_threshold
-                for candidate, score, _ in matches
-            ):
-                likely_duplicate_positions.add(position)
+            for position, value in enumerate(normalized_names):
+                if not value:
+                    continue
+                matches = process.extract(
+                    value,
+                    candidates,
+                    scorer=fuzz.ratio,
+                    score_cutoff=fuzzy_threshold,
+                    limit=10,
+                )
+                if any(
+                    candidate != value and score >= fuzzy_threshold
+                    for candidate, score, _ in matches
+                ):
+                    likely_duplicate_positions.add(position)
 
-        for position in sorted(likely_duplicate_positions):
-            flags_by_row[position].append("Possible name duplicate")
-
+            for position in sorted(likely_duplicate_positions):
+                flags_by_row[position].append("Possible name duplicate")
     if custom_regex_enabled:
         if not custom_regex_col or custom_regex_col not in df.columns:
             raise ValueError("Choose a column for the custom regex check.")
