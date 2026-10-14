@@ -79,6 +79,18 @@ def upload_content_signature(content):
     return hashlib.sha256(content).hexdigest()
 
 
+def processing_config_signature(config):
+    """Fingerprint active settings so results cannot outlive their configuration."""
+    payload = json.dumps(
+        config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 MAPPING_DB_PATH = (
     Path(__file__).resolve().parent / ".leadproof_mappings.sqlite3"
 )
@@ -838,6 +850,25 @@ with st.form("mapping_form"):
         use_container_width=True,
     )
 
+current_config_signature = processing_config_signature(
+    {
+        "record_type": record_type,
+        "company": company_choice,
+        "email": email_choice,
+        "phone": phone_choice,
+        "website": website_choice,
+        "first_name": first_name_choice,
+        "last_name": last_name_choice,
+        "remove_blank_rows": remove_blanks,
+        "validation_options": validation_options,
+        "fuzzy_duplicates": check_fuzzy_duplicates,
+        "fuzzy_threshold": fuzzy_threshold,
+        "custom_regex_enabled": check_custom_regex,
+        "custom_regex_col": custom_regex_col,
+        "custom_regex_pattern": custom_regex_pattern,
+    }
+)
+
 if run_processing:
     # Clear previous output before attempting to process this upload again.
     st.session_state.pop("leadproof_result", None)
@@ -892,6 +923,7 @@ if run_processing:
             "summary": summary,
             "filename": uploaded_file.name,
             "file_signature": upload_signature,
+            "config_signature": current_config_signature,
             "record_type": record_type,
         }
         if mapping_saved:
@@ -909,6 +941,7 @@ result = st.session_state.get("leadproof_result")
 if (
     result
     and result.get("file_signature") == upload_signature
+    and result.get("config_signature") == current_config_signature
     and result.get("record_type") == record_type
 ):
     cleaned_df = result["cleaned"]
