@@ -236,15 +236,22 @@ def phone_format_valid(value):
 
 
 def normalize_phone(value):
-    """Standardize presentation without guessing a country code or changing digits."""
+    """Standardize numeric phone formatting without changing extensions or vanity numbers."""
     if not isinstance(value, str):
         return value
+
     value = value.strip()
     if not value:
         return value
+
+    # Preserve extensions and phone numbers containing letters.
+    if re.search(r"[A-Za-z]", value):
+        return value
+
     digits = re.sub(r"\D", "", value)
     if not digits:
         return value
+
     return ("+" if value.startswith("+") else "") + digits
 
 
@@ -608,6 +615,13 @@ def build_excel(cleaned_df, flagged_df, summary):
             sheet_name="Audit Summary",
             index=False,
         )
+
+        # Keep untrusted text from being interpreted as Excel formulas.
+        for worksheet in writer.book.worksheets:
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                        cell.data_type = "s"
 
     output.seek(0)
     return output.getvalue()

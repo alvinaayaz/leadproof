@@ -5,6 +5,8 @@ import re
 import sqlite3
 import tempfile
 import unittest
+from io import BytesIO
+from openpyxl import load_workbook
 from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -30,6 +32,7 @@ FUNCTION_NAMES = {
     "email_format_valid",
     "phone_format_valid",
     "process_leads",
+    "build_excel",
     "upload_content_signature",
     "processing_config_signature",
 }
@@ -46,6 +49,7 @@ if FOUND_NAMES != FUNCTION_NAMES:
 
 NAMESPACE = {
     "pd": pd,
+    "BytesIO": BytesIO,
     "re": re,
     "urlparse": urlparse,
     "hashlib": hashlib,
@@ -101,6 +105,14 @@ class LeadProofLogicTests(unittest.TestCase):
         self.assertEqual(normalize_phone(" +92 (300) 123-4567 "), "+923001234567")
         self.assertEqual(normalize_phone("0300-123-4567"), "03001234567")
         self.assertEqual(normalize_phone(""), "")
+        self.assertEqual(
+            normalize_phone("555-123-4567 ext. 89"),
+            "555-123-4567 ext. 89",
+        )
+        self.assertEqual(
+            normalize_phone("1-800-FLOWERS"),
+            "1-800-FLOWERS",
+        )
 
     def test_auto_fixes_are_audited_and_align_after_blank_rows_are_removed(self):
         frame = pd.DataFrame({
@@ -340,6 +352,33 @@ class LeadProofLogicTests(unittest.TestCase):
                 custom_regex_col="ID",
                 custom_regex_pattern="[",
             )
+
+    def test_excel_export_keeps_formula_like_text_as_text(self):
+        build_excel = NAMESPACE["build_excel"]
+
+        cleaned = pd.DataFrame({
+            "Company": [
+                "=1+1",
+                '=HYPERLINK("https://example.com")',
+            ],
+        })
+        flagged = pd.DataFrame(columns=["Company"])
+        summary = {"processed_rows": 2, "flag_breakdown": {}}
+
+        workbook_bytes = build_excel(cleaned, flagged, summary)
+        workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+
+        try:
+            worksheet = workbook["Processed Leads"]
+            self.assertEqual(worksheet["A2"].value, "=1+1")
+            self.assertEqual(worksheet["A2"].data_type, "s")
+            self.assertEqual(
+                worksheet["A3"].value,
+                '=HYPERLINK("https://example.com")',
+            )
+            self.assertEqual(worksheet["A3"].data_type, "s")
+        finally:
+            workbook.close()
 
 
 if __name__ == "__main__":
