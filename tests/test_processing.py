@@ -361,6 +361,10 @@ class LeadProofLogicTests(unittest.TestCase):
                 "=1+1",
                 '=HYPERLINK("https://example.com")',
             ],
+            "phone": [
+                "03001234567",
+                "+923331112233",
+            ],
         })
         flagged = pd.DataFrame(columns=["Company"])
         summary = {"processed_rows": 2, "flag_breakdown": {}}
@@ -377,6 +381,11 @@ class LeadProofLogicTests(unittest.TestCase):
                 '=HYPERLINK("https://example.com")',
             )
             self.assertEqual(worksheet["A3"].data_type, "s")
+
+            self.assertEqual(worksheet["B2"].value, "03001234567")
+            self.assertEqual(worksheet["B2"].data_type, "s")
+            self.assertEqual(worksheet["B3"].value, "+923331112233")
+            self.assertEqual(worksheet["B3"].data_type, "s")
         finally:
             workbook.close()
 

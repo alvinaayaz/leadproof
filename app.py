@@ -585,6 +585,29 @@ def process_leads(
 
 
 def build_excel(cleaned_df, flagged_df, summary):
+    # Phone numbers are identifiers, not quantities. Keep them as text in Excel.
+    cleaned_df = cleaned_df.copy()
+    flagged_df = flagged_df.copy()
+    phone_column_pattern = re.compile(r"(phone|mobile|telephone|cell)", re.IGNORECASE)
+
+    def phone_value_as_text(value):
+        if pd.isna(value):
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            number = float(value)
+            if number.is_integer():
+                return str(int(number))
+        except (TypeError, ValueError, OverflowError):
+            pass
+        return str(value)
+
+    for frame in (cleaned_df, flagged_df):
+        for column in frame.columns:
+            if phone_column_pattern.search(str(column)):
+                frame[column] = frame[column].map(phone_value_as_text)
+
     output = BytesIO()
 
     summary_rows = [
@@ -615,6 +638,18 @@ def build_excel(cleaned_df, flagged_df, summary):
             sheet_name="Audit Summary",
             index=False,
         )
+
+        # Explicitly preserve phone values as text cells in Excel.
+        for worksheet in writer.book.worksheets:
+            for column_index, header_cell in enumerate(worksheet[1], start=1):
+                if re.search(r"(phone|mobile|telephone|cell)", str(header_cell.value or ""), re.IGNORECASE):
+                    for row in worksheet.iter_rows(
+                        min_row=2, min_col=column_index, max_col=column_index
+                    ):
+                        cell = row[0]
+                        if cell.value is not None:
+                            cell.value = str(cell.value)
+                            cell.data_type = "s"
 
         # Keep untrusted text from being interpreted as Excel formulas.
         for worksheet in writer.book.worksheets:
